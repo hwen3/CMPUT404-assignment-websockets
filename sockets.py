@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 import flask
-from flask import Flask, request
+from flask import Flask, request, redirect, jsonify
 from flask_sockets import Sockets
 import gevent
 from gevent import queue
@@ -26,12 +26,25 @@ app = Flask(__name__)
 sockets = Sockets(app)
 app.debug = True
 
+class Client:
+    def __init__(self, socket):
+        self.socket = socket
+
+    def sendData(self, entity, data):
+        ''' do something with the update ! '''
+        resData = {}
+        resData[entity] = data
+        self.socket.send(json.dumps(resData))
+
+    def close(self):
+        self.socket.close()
+
 class World:
     def __init__(self):
         self.clear()
         # we've got listeners now!
         self.listeners = list()
-        
+
     def add_set_listener(self, listener):
         self.listeners.append( listener )
 
@@ -48,39 +61,54 @@ class World:
     def update_listeners(self, entity):
         '''update the set listeners'''
         for listener in self.listeners:
-            listener(entity, self.get(entity))
+            try:
+                listener.sendData(entity, self.get(entity))
+            except:
+                self.listeners.remove(listener)
 
     def clear(self):
         self.space = dict()
 
     def get(self, entity):
         return self.space.get(entity,dict())
-    
+
     def world(self):
         return self.space
 
-myWorld = World()        
+myWorld = World()
+RESPONSE_OK = 200
 
-def set_listener( entity, data ):
-    ''' do something with the update ! '''
+# myWorld.add_set_listener( set_listener )
 
-myWorld.add_set_listener( set_listener )
-        
 @app.route('/')
 def hello():
     '''Return something coherent here.. perhaps redirect to /static/index.html '''
-    return None
+    return redirect('/static/index.html')
 
-def read_ws(ws,client):
+def read_ws(ws,client=None):
     '''A greenlet function that reads from the websocket and updates the world'''
-    # XXX: TODO IMPLEMENT ME
-    return None
+    msg = ws.receive()
+    if (msg is not None):
+        packet = json.loads(msg)
+        for entity, data in packet.iteritems():
+            myWorld.set(entity, data)
+
 
 @sockets.route('/subscribe')
 def subscribe_socket(ws):
     '''Fufill the websocket URL of /subscribe, every update notify the
        websocket and read updates from the websocket '''
-    # XXX: TODO IMPLEMENT ME
+
+    client = Client(ws)
+    myWorld.add_set_listener(client)
+    ws.send(json.dumps(myWorld.world()))
+    try:
+        while True:
+        # block here
+            read_ws(ws)
+    except:
+        client.close()
+
     return None
 
 
@@ -96,24 +124,29 @@ def flask_post_json():
 
 @app.route("/entity/<entity>", methods=['POST','PUT'])
 def update(entity):
-    '''update the entities via this interface'''
-    return None
+    jsonData = flask_post_json()
+    if jsonData != None:
+        for prop in jsonData:
+            myWorld.update(entity, prop, jsonData[prop])
+    return jsonify(myWorld.get(entity)), RESPONSE_OK
 
-@app.route("/world", methods=['POST','GET'])    
+@app.route("/world", methods=['POST','GET'])
 def world():
     '''you should probably return the world here'''
-    return None
+    return jsonify(myWorld.world()), RESPONSE_OK
 
-@app.route("/entity/<entity>")    
+@app.route("/entity/<entity>")
 def get_entity(entity):
     '''This is the GET version of the entity interface, return a representation of the entity'''
-    return None
+    return jsonify(myWorld.get(entity)), RESPONSE_OK
+
 
 
 @app.route("/clear", methods=['POST','GET'])
 def clear():
     '''Clear the world out!'''
-    return None
+    myWorld.clear()
+    return "Cleared!", RESPONSE_OK
 
 
 
